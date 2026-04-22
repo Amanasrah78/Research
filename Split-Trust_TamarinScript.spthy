@@ -1,1 +1,209 @@
-file to be uploaded
+begin
+
+builtins: signing, hashing
+functions: kdf/1, view/1, mac/2
+
+/* ================================================================
+   LONG-TERM KEYS
+   ================================================================ */
+
+rule Init_LongTermKeys:
+  [ Fr(~skSAC), Fr(~skGA), Fr(~skGB), Fr(~skR) ]
+  -->
+  [ !Ltk('SAC', ~skSAC), !Pk('SAC', pk(~skSAC)),
+    !Ltk('GA',  ~skGA),  !Pk('GA',  pk(~skGA)),
+    !Ltk('GB',  ~skGB),  !Pk('GB',  pk(~skGB)),
+    !Ltk('R',   ~skR),   !Pk('R',   pk(~skR)),
+    Out(pk(~skSAC)), Out(pk(~skGA)), Out(pk(~skGB)), Out(pk(~skR))
+  ]
+
+/* ================================================================
+   PHASE 0 — DID + VC ANCHORING (ABSTRACTED)
+   ================================================================ */
+
+rule Anchor_DID:
+  [ Fr(~did), Fr(~doc), Fr(~tx) ]
+  --[ DIDAnchored(~did, ~tx) ]->
+  [ !DID(~did),
+    !IOTA_Anchor('did', ~did, h(~doc), ~tx)
+  ]
+
+rule Issue_VC:
+  [ !DID(didR), Fr(~exp), Fr(~tx) ]
+  --[ VCAnchored(didR, ~tx) ]->
+  [ VC(didR, ~exp),
+    !IOTA_Anchor('vc', didR, h(<didR, ~exp>), ~tx)
+  ]
+
+/* ================================================================
+   PHASE 1 — REGISTRATION
+   ================================================================ */
+
+rule Register_Device:
+  [ VC(didR, exp), Fr(~tx) ]
+  --[ RegCompleted(didR, 'GB', ~tx) ]->
+  [ !Registration(didR, 'GB', ~tx),
+    !IOTA_Anchor('reg', didR, h(<didR,'GB'>), ~tx)
+  ]
+
+/* ================================================================
+   PHASE 2 — SAC ISSUES SESSION CONTEXT
+   ================================================================ */
+
+
+
+/* ================================================================
+   NEW: SAC ISSUES AUTHORIZATION SECRET (SECOND FACTOR)
+   ================================================================ */
+/* This models a trusted delivery of AuthS to BOTH gateways.
+   Do NOT Out(AuthS), otherwise the attacker learns it and your KCI goal collapses.
+*/
+
+/* ================================================================
+   PHASE 2 — POST-QUANTUM (SYMBOLIC) SESSION ESTABLISHMENT
+   ================================================================ */
+
+
+
+
+/* ================================================================
+   PHASE 3 — SESSION COMMITMENT & REVOCATION
+   ================================================================ */
+
+
+
+/* ================================================================
+   COMPROMISE RULES (EXAMPLE)
+   ================================================================ */
+
+
+
+/* ================================================================
+   SAC TOKEN ISSUANCE
+   ================================================================ */
+
+rule SAC_Issue_Token:
+  [ SessionContext(didR, IDsess, Ssac, RIOTA),
+    !Ltk('SAC', skSAC),
+    Fr(~exp)
+  ]
+  --[ TokenIssued(IDsess, didR) ]->
+  [ Token(IDsess, didR, 'GA', 'GB', ~exp,
+      sign(<IDsess, didR, 'GA', 'GB', RIOTA, ~exp>, skSAC)) ]
+
+/* ================================================================
+   SECURITY LEMMAS
+   ================================================================ */
+
+/* --- Core authentication properties --- */
+
+/* GA only completes if GB has previously participated */
+lemma mutual_authentication:
+  "All did ids #i.
+     GA_Complete('GA','GB',did,ids) @ #i
+     ==> (Ex #j. GB_Complete('GB','GA',did,ids) @ #j & #j < #i)"
+
+/* GA completion implies that GB was alive */
+lemma aliveness:
+  "All did ids #i.
+     GA_Complete('GA','GB',did,ids) @ #i
+   ==> (Ex #j. GB_Complete('GB','GA',did,ids) @ #j)"
+
+/* Injective agreement: no replayed completion */
+lemma injective_agreement:
+  "All did ids #i #j.
+     GA_Complete('GA','GB',did,ids) @ #i
+   & GA_Complete('GA','GB',did,ids) @ #j
+   ==> #i = #j"
+
+
+/* --- Session key properties --- */
+
+/* Secrecy of the established session key */
+lemma session_key_secrecy:
+  "All did ids k #i.
+     SessionEstablished('GA','GB',did,ids,k) @ #i
+     ==> not (Ex #t. K(k) @ #t)"
+
+/* Both parties derive the same session key */
+lemma key_agreement:
+  "All did ids k1 k2 #i #j.
+     SessionEstablished('GA','GB',did,ids,k1) @ #i
+   & SessionEstablished('GA','GB',did,ids,k2) @ #j
+   ==> k1 = k2"
+
+/* Keys are bound to a unique session identifier */
+lemma key_independence:
+  "All did ids1 ids2 k #i #j.
+     SessionEstablished('GA','GB',did,ids1,k) @ #i
+   & SessionEstablished('GA','GB',did,ids2,k) @ #j
+   ==> ids1 = ids2"
+
+
+/* --- Unknown key-share (UKS) resistance --- */
+
+/* GA cannot be tricked into sharing a key with a different peer */
+lemma uks_resistance:
+  "All did ids k x #i #j.
+     SessionEstablished('GA','GB',did,ids,k) @ #i
+   & SessionEstablished('GA',x,  did,ids,k) @ #j
+   ==> x = 'GB'"
+
+
+/* --- Session identifier properties --- */
+
+/* Session identifiers are uniquely issued by SAC */
+lemma session_id_unique:
+  "All ids did1 did2 #i #j.
+     SessionIssued(ids, did1) @ #i
+   & SessionIssued(ids, did2) @ #j
+   ==> #i = #j"
+
+
+/* --- Compromise and forward-security–like properties --- */
+
+/* Session keys remain secret if GB is not compromised before completion */
+lemma forward_secrecy_like:
+  "All did ids k #i.
+     SessionEstablished('GA','GB',did,ids,k) @ #i
+   & not(Ex #t. RevealLtk('GB') @ #t & #t < #i)
+   ==> not(Ex #u. K(k) @ #u)"
+
+
+/* --- Ledger anchoring properties --- */
+
+/* A session can only be anchored after a valid session establishment */
+lemma anchor_implies_session:
+  "All ids tx #i.
+     SessionAnchored(ids, tx) @ #i
+   ==> (Ex did k #j.
+          SessionEstablished('GA','GB',did,ids,k) @ #j
+        & #j < #i)"
+
+/* Revocation is only possible after anchoring */
+lemma revoke_requires_anchor:
+  "All ids tx #i.
+     SessionRevoked(ids, tx) @ #i
+   ==> (Ex tx2 #j.
+          SessionAnchored(ids, tx2) @ #j & #j < #i)"
+
+
+/* --- Split-trust / compromise-resilience properties --- */
+
+/* GA completion always requires a SAC-issued token */
+lemma ga_complete_requires_sac_token_even_if_gb_compromised:
+  "All did ids #i.
+     GA_Complete('GA','GB',did,ids) @ #i
+   ==> (Ex #j. TokenIssued(ids, did) @ #j & #j < #i)"
+
+/* Even if GB’s long-term key is revealed, authentication still holds
+   provided SAC is not compromised */
+lemma mutual_authentication_resilient_to_gb_ltk_reveal:
+  "All did ids #i.
+     GA_Complete('GA','GB',did,ids) @ #i
+   & (Ex #t. RevealLtk('GB') @ #t & #t < #i)
+   & not(Ex #u. RevealLtk('SAC') @ #u & #u < #i)
+   ==> (Ex #j. GB_Complete('GB','GA',did,ids) @ #j & #j < #i)"
+
+
+end
